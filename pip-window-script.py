@@ -54,34 +54,30 @@ class YouTubePiPController:
         return None, None
 
     def get_monitor_info(self):
-        """Gets information about all connected monitors using win32api."""
-        try:
-            # Get the primary monitor dimensions
-            primary_monitor = (0, 0, 
-                             win32api.GetSystemMetrics(win32con.SM_CXSCREEN),
-                             win32api.GetSystemMetrics(win32con.SM_CYSCREEN))
-            
-            # Get the virtual screen dimensions (all monitors)
-            virtual_screen = (win32api.GetSystemMetrics(win32con.SM_XVIRTUALSCREEN),
-                            win32api.GetSystemMetrics(win32con.SM_YVIRTUALSCREEN),
-                            win32api.GetSystemMetrics(win32con.SM_CXVIRTUALSCREEN),
-                            win32api.GetSystemMetrics(win32con.SM_CYVIRTUALSCREEN))
-            
-            self.log_message(f"Primary monitor: {primary_monitor}")
-            self.log_message(f"Virtual screen: {virtual_screen}")
-            
-            # If virtual screen is wider than primary, we have a second monitor
-            if virtual_screen[2] > primary_monitor[2]:
-                # Assume second monitor is to the right
-                second_monitor = (primary_monitor[2], 0,
-                                virtual_screen[2], virtual_screen[3])
-                return [primary_monitor, second_monitor]
-            else:
-                return [primary_monitor]
-                
-        except Exception as e:
-            self.log_message(f"Error getting monitor info: {str(e)}")
-            return []
+        """Gets information about all connected monitors."""
+        # Get primary monitor info
+        primary_width = win32api.GetSystemMetrics(0)  # SM_CXSCREEN
+        primary_height = win32api.GetSystemMetrics(1)  # SM_CYSCREEN
+        
+        # Get virtual screen info (all monitors)
+        virtual_left = win32api.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+        virtual_top = win32api.GetSystemMetrics(77)    # SM_YVIRTUALSCREEN
+        virtual_width = win32api.GetSystemMetrics(78)  # SM_CXVIRTUALSCREEN
+        virtual_height = win32api.GetSystemMetrics(79) # SM_CYVIRTUALSCREEN
+        
+        self.log_message(f"Primary monitor: {primary_width}x{primary_height}")
+        self.log_message(f"Virtual screen: {virtual_width}x{virtual_height} at ({virtual_left},{virtual_top})")
+        
+        # Calculate second monitor position
+        second_monitor_x = primary_width
+        second_monitor_width = virtual_width - primary_width
+        
+        if second_monitor_width > 0:
+            return {
+                'primary': (0, 0, primary_width, primary_height),
+                'secondary': (second_monitor_x, 0, second_monitor_x + second_monitor_width, virtual_height)
+            }
+        return None
 
     def find_pip_window(self):
         """Finds the Picture-in-Picture window."""
@@ -105,47 +101,61 @@ class YouTubePiPController:
             self.log_message("No PiP window found among visible windows")
             return None
 
+    def force_window_foreground(self, hwnd):
+        """Forces a window to the foreground."""
+        # Get the current foreground window
+        curr_fore = win32gui.GetForegroundWindow()
+        
+        # Get current thread ID
+        curr_thread = win32api.GetCurrentThreadId()
+        
+        # Get thread ID of the window we want to bring to foreground
+        window_thread = win32process.GetWindowThreadProcessId(hwnd)[0]
+        
+        # Attach the threads
+        win32process.AttachThreadInput(window_thread, curr_thread, True)
+        
+        # Force the window to foreground
+        win32gui.SetForegroundWindow(hwnd)
+        win32gui.BringWindowToTop(hwnd)
+        
+        # Detach the threads
+        win32process.AttachThreadInput(window_thread, curr_thread, False)
+
     def move_to_second_monitor(self, hwnd):
         """Moves and resizes PiP window to the second monitor."""
         monitors = self.get_monitor_info()
-        if len(monitors) < 2:
+        if not monitors:
             self.log_message("Second monitor not detected")
             return False
 
         # Get second monitor dimensions
-        second_monitor = monitors[1]  # (x, y, width, height)
+        second_monitor = monitors['secondary']
         monitor_x = second_monitor[0]
-        monitor_y = second_monitor[1]
         monitor_width = second_monitor[2] - second_monitor[0]
         monitor_height = second_monitor[3] - second_monitor[1]
 
-        # Calculate new window size (75% of monitor size)
-        new_width = int(monitor_width * 0.30)  # Made window smaller (30% instead of 75%)
-        new_height = int(monitor_height * 0.30)
+        # Calculate new window size (25% of monitor size)
+        new_width = int(monitor_width * 0.25)
+        new_height = int(monitor_height * 0.25)
         new_x = monitor_x + (monitor_width - new_width) // 2
-        new_y = monitor_y + (monitor_height - new_height) // 2
+        new_y = (monitor_height - new_height) // 2
 
         self.log_message(f"Moving window to: x={new_x}, y={new_y}, width={new_width}, height={new_height}")
 
         try:
-            # First, modify the window style
+            # Remove the window from the taskbar
             style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
             win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, 
-                                 style | win32con.WS_EX_TOPMOST)
+                                 style | win32con.WS_EX_TOOLWINDOW | win32con.WS_EX_TOPMOST)
 
-            # Then move and resize the window
-            win32gui.SetWindowPos(
-                hwnd, 
-                win32con.HWND_TOPMOST,
-                new_x, 
-                new_y, 
-                new_width, 
-                new_height,
-                win32con.SWP_SHOWWINDOW
-            )
+            # Move and resize the window
+            flags = win32con.SWP_SHOWWINDOW | win32con.SWP_FRAMECHANGED
+            win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST,
+                                new_x, new_y, new_width, new_height, flags)
             
-            # Ensure window is active
-            win32gui.SetForegroundWindow(hwnd)
+            # Force the window to foreground
+            self.force_window_foreground(hwnd)
             
             self.log_message("Successfully moved and resized window")
             return True
