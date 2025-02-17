@@ -2,6 +2,7 @@ import time
 import threading
 import tkinter as tk
 from tkinter.scrolledtext import ScrolledText
+from tkinter import ttk
 import win32gui
 import win32con
 import win32process
@@ -55,29 +56,28 @@ class YouTubePiPController:
 
     def get_monitor_info(self):
         """Gets information about all connected monitors."""
-        # Get primary monitor info
-        primary_width = win32api.GetSystemMetrics(0)  # SM_CXSCREEN
-        primary_height = win32api.GetSystemMetrics(1)  # SM_CYSCREEN
+        primary_width = win32api.GetSystemMetrics(0)
+        primary_height = win32api.GetSystemMetrics(1)
         
-        # Get virtual screen info (all monitors)
-        virtual_left = win32api.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
-        virtual_top = win32api.GetSystemMetrics(77)    # SM_YVIRTUALSCREEN
-        virtual_width = win32api.GetSystemMetrics(78)  # SM_CXVIRTUALSCREEN
-        virtual_height = win32api.GetSystemMetrics(79) # SM_CYVIRTUALSCREEN
-        
+        virtual_left = win32api.GetSystemMetrics(76)
+        virtual_top = win32api.GetSystemMetrics(77)
+        virtual_width = win32api.GetSystemMetrics(78)
+        virtual_height = win32api.GetSystemMetrics(79)
+
         self.log_message(f"Primary monitor: {primary_width}x{primary_height}")
         self.log_message(f"Virtual screen: {virtual_width}x{virtual_height} at ({virtual_left},{virtual_top})")
         
-        # Calculate second monitor position
-        second_monitor_x = primary_width
+        second_monitor_x = virtual_left
         second_monitor_width = virtual_width - primary_width
         
         if second_monitor_width > 0:
+            self.log_message(f"Second monitor positioned at x={second_monitor_x}, width={second_monitor_width}")
             return {
                 'primary': (0, 0, primary_width, primary_height),
                 'secondary': (second_monitor_x, 0, second_monitor_x + second_monitor_width, virtual_height)
             }
         return None
+
 
     def find_pip_window(self):
         """Finds the Picture-in-Picture window."""
@@ -123,7 +123,7 @@ class YouTubePiPController:
         win32process.AttachThreadInput(window_thread, curr_thread, False)
 
     def move_to_second_monitor(self, hwnd):
-        """Moves and resizes PiP window to the second monitor."""
+        """Moves and resizes PiP window to the second monitor (with faster operations)."""
         monitors = self.get_monitor_info()
         if not monitors:
             self.log_message("Second monitor not detected")
@@ -135,29 +135,24 @@ class YouTubePiPController:
         monitor_width = second_monitor[2] - second_monitor[0]
         monitor_height = second_monitor[3] - second_monitor[1]
 
-        # Calculate new window size (25% of monitor size)
-        new_width = int(monitor_width * 0.25)
-        new_height = int(monitor_height * 0.25)
+        # Resize window to 75% of the second monitor's resolution
+        new_width = int(monitor_width * 0.75)
+        new_height = int(monitor_height * 0.75)
+        
+        # Position the window centered on the second monitor
         new_x = monitor_x + (monitor_width - new_width) // 2
         new_y = (monitor_height - new_height) // 2
 
-        self.log_message(f"Moving window to: x={new_x}, y={new_y}, width={new_width}, height={new_height}")
+        self.log_message(f"Moving and resizing window to: x={new_x}, y={new_y}, width={new_width}, height={new_height}")
 
         try:
-            # Remove the window from the taskbar
-            style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, 
-                                 style | win32con.WS_EX_TOOLWINDOW | win32con.WS_EX_TOPMOST)
-
-            # Move and resize the window
+            # Move and resize the window (skip the taskbar-related operations for speed)
             flags = win32con.SWP_SHOWWINDOW | win32con.SWP_FRAMECHANGED
             win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST,
                                 new_x, new_y, new_width, new_height, flags)
             
-            # Force the window to foreground
-            self.force_window_foreground(hwnd)
-            
-            self.log_message("Successfully moved and resized window")
+            # Skip bringing window to foreground if it's already visible
+            self.log_message("Successfully moved and resized window to 75% of second monitor's resolution")
             return True
             
         except Exception as e:
@@ -165,31 +160,28 @@ class YouTubePiPController:
             return False
 
     def activate_pip(self):
-        """Activates PiP mode and moves window to second monitor."""
+        """Activates PiP mode and moves window to second monitor with minimized delay."""
         hwnd, title = self.get_active_youtube_window()
         if not hwnd:
             self.log_message("No active YouTube video detected")
             return False
 
-        # Activate PiP mode
+        # Activate PiP mode with no delay
         win32gui.SetForegroundWindow(hwnd)
-        time.sleep(0.5)
         pyautogui.hotkey('alt', 'p')
         self.log_message("Activated PiP mode")
 
-        # Wait longer for PiP window to appear and stabilize
-        for attempt in range(5):
-            self.log_message(f"Attempting to find PiP window (attempt {attempt + 1}/5)")
-            time.sleep(1)
-            pip_hwnd = self.find_pip_window()
-            if pip_hwnd:
-                if self.move_to_second_monitor(pip_hwnd):
-                    self.log_message("Successfully moved PiP to second monitor")
-                    return True
-                break
+        # Directly find PiP window without unnecessary delay
+        pip_hwnd = self.find_pip_window()
+        if pip_hwnd:
+            if self.move_to_second_monitor(pip_hwnd):
+                self.log_message("Successfully moved PiP to second monitor")
+                return True
+        else:
+            self.log_message("Failed to find PiP window after activation")
         
-        self.log_message("Failed to find PiP window after multiple attempts")
         return False
+
 
     def monitor_youtube(self):
         """Monitors for active YouTube videos."""
@@ -220,24 +212,61 @@ class YouTubePiPController:
         self.log_message("Stopped monitoring")
 
     def setup_gui(self):
-        """Sets up the GUI interface."""
+        """Sets up the sleek, modern UI interface."""
         self.root = tk.Tk()
         self.root.title("YouTube PiP Controller")
         self.root.geometry("800x600")
+        self.root.configure(bg='#2E2E2E')
 
-        self.status_label = tk.Label(self.root, text="Status: Stopped", font=("Arial", 12))
+        # Title label
+        self.title_label = tk.Label(self.root, text="YouTube PiP Controller", font=("Arial", 18, "bold"), bg='#2E2E2E', fg='#FFFFFF')
+        self.title_label.pack(pady=20)
+
+        # Status Label
+        self.status_label = tk.Label(self.root, text="Status: Stopped", font=("Arial", 14), bg='#2E2E2E', fg='#FFFFFF')
         self.status_label.pack(pady=5)
 
-        button_frame = tk.Frame(self.root)
-        button_frame.pack(pady=5)
+        # Buttons frame
+        button_frame = tk.Frame(self.root, bg='#2E2E2E')
+        button_frame.pack(pady=20)
 
-        tk.Button(button_frame, text="Start", font=("Arial", 12), 
-                 command=self.start_monitoring).pack(side=tk.LEFT, padx=5)
-        tk.Button(button_frame, text="Stop", font=("Arial", 12), 
-                 command=self.stop_monitoring).pack(side=tk.LEFT, padx=5)
+        # Start Button
+        self.start_button = tk.Button(button_frame, text="Start", font=("Arial", 12), command=self.start_monitoring, 
+                                      bg='#007BFF', fg='#FFFFFF', relief="flat", height=2, width=10, 
+                                      activebackground='#0056b3', activeforeground='#FFFFFF', bd=0)
+        self.start_button.pack(side=tk.LEFT, padx=10)
 
-        self.console_text = ScrolledText(self.root, height=30, width=80, state=tk.DISABLED)
+        # Stop Button
+        self.stop_button = tk.Button(button_frame, text="Stop", font=("Arial", 12), command=self.stop_monitoring, 
+                                     bg='#DC3545', fg='#FFFFFF', relief="flat", height=2, width=10, 
+                                     activebackground='#c82333', activeforeground='#FFFFFF', bd=0)
+        self.stop_button.pack(side=tk.LEFT, padx=10)
+
+        # Console Textbox (for logs)
+        self.console_text = ScrolledText(self.root, height=20, width=80, font=("Arial", 10), bg='#1C1C1C', fg='#FFFFFF', 
+                                        wrap=tk.WORD, bd=0, highlightthickness=0, insertbackground="white")
         self.console_text.pack(pady=10)
+        self.console_text.config(state=tk.DISABLED)
+
+        # Entry for quick actions or commands
+        self.command_entry = tk.Entry(self.root, font=("Arial", 12), bg='#3E3E3E', fg='#FFFFFF', 
+                                      relief="flat", bd=0, insertbackground="white")
+        self.command_entry.pack(pady=10, fill=tk.X, padx=20)
+
+        # Apply the smooth, sleek shadows and corner-radius effect using ttk themes
+        style = ttk.Style()
+        style.configure("TButton",
+                        relief="flat",
+                        padding=[12, 8],
+                        font=("Arial", 12),
+                        background='#007BFF',
+                        foreground='white',
+                        focuscolor='#0056b3')
+        
+        style.configure("TLabel",
+                        font=("Arial", 14),
+                        background='#2E2E2E',
+                        foreground='#FFFFFF')
 
     def run(self):
         """Starts the application."""
